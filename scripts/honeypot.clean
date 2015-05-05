@@ -1,0 +1,35 @@
+#!/bin/bash
+
+EXT_IFACE=eth0
+SERVICE=22
+
+HOSTNAME=$(/bin/hostname)
+LIFETIME=$((3600 * 6))
+
+datediff () {
+    d1=$(/bin/date -d "$1" +%s)
+    d2=$(/bin/date -d "$2" +%s)
+    echo $((d1 - d2))
+}
+
+for CID in $(/usr/bin/docker ps -a --no-trunc | grep "honeypot-" | cut -f1 -d" "); do
+    STARTED=$(/usr/bin/docker inspect --format '{{ .State.StartedAt }}' ${CID})
+    RUNTIME=$(datediff now "${STARTED}")
+
+    if [[ "${RUNTIME}" -gt "${LIFETIME}" ]]; then
+        logger -p local3.info "Stopping honeypot container ${CID}"
+        /usr/bin/docker stop $CID
+    fi
+
+    RUNNING=$(/usr/bin/docker inspect --format '{{ .State.Running }}' ${CID})
+
+    if [[ "$RUNNING" != "true" ]]; then
+	# delete iptables rule
+	CIP=$(/usr/bin/docker inspect --format '{{ .NetworkSettings.IPAddress }}' ${CID})
+	REMOTE_HOST=$(/usr/bin/docker inspect --format '{{ .Name }}' ${CID} | cut -f2 -d-)
+	/usr/bin/iptables -t nat -D PREROUTING -i ${EXT_IFACE} -s ${$REMOTE_HOST} ! --dport ${SERVICE} -j DNAT --to-destination ${CIP}
+        logger -p local3.info "Removing honeypot container ${CID}"
+        /usr/bin/docker rm $CID
+    fi
+done
+
